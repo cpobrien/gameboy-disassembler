@@ -409,14 +409,14 @@ const tick = (program: Uint8Array): string => {
         PC: 0,
         SP: 0
     };
-    while (i < program.length) {
-        var opcode: number = program[i];
+    while (pc.PC < program.length) {
+        var opcode: number = program[pc.PC];
         var size: number = INSTRUCTION_SIZE_TABLE[opcode];
-        var code: Uint8Array = program.slice(i, i + size);
+        var code: Uint8Array = program.slice(pc.PC, pc.PC + size);
         var parser: OpCodeFunction = PARSE_TABLE[opcode];
         if (opcode == 0xCB) {
-            opcode = program[++i];
-            code = program.slice(i, i + size);
+            opcode = program[++pc.PC];
+            code = program.slice(pc.PC, pc.PC + size);
             parser = CB_TABLE[opcode];
         }
         if (parser === fail) {
@@ -425,16 +425,16 @@ const tick = (program: Uint8Array): string => {
         }
         const response: OpCodeResponse = parser({code: code, pc: pc});
         const cycles = PARSE_CYCLE_TABLE[opcode] + (response.cycles || 0);
-        instructions.push(`${response.text}\t\t$${toHex(i)}\t${cycles} cycles`);
-        if (i === 0xA7) {
+        instructions.push(`${response.text}\t\t$${toHex(pc.PC)}\t${cycles} cycles`);
+        if (pc.PC === 0xA7) {
             instructions.push('~~~Gameboy logo data, skipping ahead~~~');
-            i = 0xE0;
+            pc.PC = 0xE0;
             continue;
         }
-        i += size;
+        pc.PC += size;
         cycle += cycles;
     }
-    return instructions.reduce((a, b) => `${a}\n${b}`, "");
+    return `${instructions.reduce((a, b) => `${a}\n${b}`, "")}\n\n\tcycles: ${cycle}`;
 }
 
 fs.readFile(PATH, (err: any, data: any) => {
