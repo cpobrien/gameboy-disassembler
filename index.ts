@@ -6,6 +6,19 @@ const toWord = (lo: number, hi: number): number => hi << 8 | lo;
 const toHex = (num: number): string => num.toString(16);
 const toSigned = (num: number): number => ((~num & 0xFF) - 1) * ((num & 0x80) === 0 ? 1 : -1);
 
+type PC = {
+    A: number,
+    B: number,
+    C: number,
+    D: number,
+    E: number,
+    H: number,
+    L: number,
+    F: number,
+    PC: number,
+    SP: number
+}
+
 const CB_CYCLE_TABLE: number[] = [
     8, 8, 8, 8, 8, 8, 16, 8,
     8, 8, 8, 8, 8, 8, 16, 8,
@@ -42,199 +55,186 @@ const CB_CYCLE_TABLE: number[] = [
 ];
 
 
-type ParseResponse = {
+type OpCodeResponse = {
     text: string,
-    cycles: number
+    cycles?: number
 };
 
-type ParsingFunction = {(code: Uint8Array): ParseResponse};
+type OpCodeRequest = {
+    code: Uint8Array;
+    pc: PC;
+}
 
-const ret: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+type OpCodeFunction = {(code: OpCodeRequest): OpCodeResponse};
+
+const ret: OpCodeFunction = request => {
+    const op: number = request.code[0];
     switch (op) {
-        case 0xC0: return {text: `\tRET NZ`, cycles: cycles};
-        case 0xC8: return {text: `\tRET Z`, cycles: cycles};
-        case 0xC9: return {text: `\tRET`, cycles: cycles};
-        case 0xD0: return {text: `\tRET NC`, cycles: cycles};
-        case 0xD8: return {text: `\tRET C`, cycles: cycles};
-        case 0xD9: return {text: `\tRETI`, cycles: cycles};
-        default: return {text: `???`, cycles: cycles};
+        case 0xC0: return {text: `\tRET NZ`};
+        case 0xC8: return {text: `\tRET Z`};
+        case 0xC9: return {text: `\tRET`};
+        case 0xD0: return {text: `\tRET NC`};
+        case 0xD8: return {text: `\tRET C`};
+        case 0xD9: return {text: `\tRETI`};
+        default: return {text: `???`};
     }
 }
 
-const addReg: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    return {text: `\tADD A,${['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7]}`, cycles: cycles}
+const addReg: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    return {text: `\tADD A,${['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7]}`}
 }
-const add: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    if ((op >> 4) === 8) return addReg(code);
-    return {text: '???', cycles: cycles};
+const add: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    if ((op >> 4) === 8) return addReg(request);
+    return {text: '???'};
 }
 
-const rla: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-  return {text: `\tRLA`, cycles: cycles};
+const rla: OpCodeFunction = request => {
+    const op: number = request.code[0];
+  return {text: `\tRLA`};
 }
 
-const rl: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    return {text: `\tRL ${['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7]}`, cycles: cycles};
+const rl: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    return {text: `\tRL ${['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7]}`};
 }
 
-const ldWordToA: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    const word: string = toHex(toWord(code[1], code[2]));
-    if (op === 0xEA) return {text: `\tLD ($${word}),A`, cycles: cycles};
-    else return {text: `\tLD A,($${word})`, cycles: cycles};
+const ldWordToA: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    const word: string = toHex(toWord(request.code[1], request.code[2]));
+    if (op === 0xEA) return {text: `\tLD ($${word}),A`};
+    else return {text: `\tLD A,($${word})`};
 }
 
-const ldWord: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const ldWord: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const loc: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
-    const pos: string = toHex(toWord(code[1], code[2]));
-    return {text: `\tLD ${loc},$${pos}`, cycles: cycles};
+    const pos: string = toHex(toWord(request.code[1], request.code[2]));
+    return {text: `\tLD ${loc},$${pos}`};
 }
 
-const ldCombo: ParsingFunction = code => {
-    const op : number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const ldCombo: OpCodeFunction = request => {
+    const op : number = request.code[0];
     const loc: string = ['(BC)', '(DE)', '(HL+)', '(HL-)'][op >> 4];
-    if ((op & 0xF) == 0x2) return {text: `\tLD ${loc},A`, cycles: cycles};
-    else return {text: `\tLD A,${loc}`, cycles: cycles};
+    if ((op & 0xF) == 0x2) return {text: `\tLD ${loc},A`};
+    else return {text: `\tLD A,${loc}`};
 }
 
-const sub: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const sub: OpCodeFunction = request => {
+    const op: number = request.code[0];
     var val: number | string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7];
     if (op == 0xD6) {
         val = code[1];
     }
-    return {text: `\tSUB ${val}`, cycles: cycles};
+    return {text: `\tSUB ${val}`};
 }
 
-const ldReg: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const ldReg: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const regTable: string[] = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'];
     const from: string = regTable[(op - 0x40) >> 3];
     const to: string = regTable[op & 7]
-    return `\tLD ${from},${to}`;
+    return {text: `\tLD ${from},${to}`};
 }
 
-const ldByte: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const ldByte: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 6) >> 3];
-    return `\tLD ${reg},$${toHex(code[1])}`;
+    return {text: `\tLD ${reg},$${toHex(request.code[1])}`};
 }
 
-const ldC: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    if (op === 0xE2) return `\tLD ($FF00+C),A`;
-    else return `\tLD A,$FF00+C)`;
+const ldC: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    if (op === 0xE2) return {text: `\tLD ($FF00+C),A`};
+    else return {text: `\tLD A,$FF00+C)`};
 }
 
-const ld: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    if (op >> 4 < 4 && (op & 7) === 1) return ldWord(code);
-    if (op >> 4 < 4 && (op & 7) === 6) return ldByte(code);
-    if (op >> 4 < 4 && ((op & 7) === 2 || (op & 0xF) === 0xA)) return ldCombo(code);
-    if (op >> 4 >= 4 && op >> 4 < 8) return ldReg(code);
-    if (op === 0xE2 || op === 0xF2) return ldC(code);
-    if (op === 0xEA || op === 0xFA) return ldWordToA(code);
-    return `\t???`;
+const ld: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    if (op >> 4 < 4 && (op & 7) === 1) return ldWord(request);
+    if (op >> 4 < 4 && (op & 7) === 6) return ldByte(request);
+    if (op >> 4 < 4 && ((op & 7) === 2 || (op & 0xF) === 0xA)) return ldCombo(request);
+    if (op >> 4 >= 4 && op >> 4 < 8) return ldReg(request);
+    if (op === 0xE2 || op === 0xF2) return ldC(request);
+    if (op === 0xEA || op === 0xFA) return ldWordToA(request);
+    return {text: `\t???`};
 }
-const jr: ParsingFunction = code => {
-    const opcode: number = code[0];
+const jr: OpCodeFunction = request => {
+    const opcode: number = request.code[0];
     let reg: string = ['', 'NZ', 'Z', 'NC', 'C'][(opcode - 0x18) >> 3];
-    return `\tJR ${reg + (reg === '' ? '': ',')}+$${toHex(code[1])}`;
+    return {text: `\tJR ${reg + (reg === '' ? '': ',')}+$${toHex(request.code[1])}`};
 };
-const xor: ParsingFunction = code => '\tXOR A';
-const fail: ParsingFunction = code => "UNKNOWN";
-const bit: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const xor: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    return {text: '\tXOR A'};
+}
+const fail: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    return {text: "UNKNOWN"} 
+}
+const bit: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', '(HL)', 'A'][op & 7];
     const num: number = (op - 0x40) >> 3;
 
-    return `\tBIT ${num},${reg}`;
+    return {text: `\tBIT ${num},${reg}`};
 }
 
-const decWord: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const decWord: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
-    return `\tDEC ${word}`;
+    return {text: `\tDEC ${word}`};
 }
 
-const decReg: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const decReg: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 5) >> 3];
-    return `\tDEC ${reg}`
+    return {text: `\tDEC ${reg}`}
 }
 
-const dec: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    if ((op & 7) === 5) return decReg(code);
-    else return decWord(code);
+const dec: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    if ((op & 7) === 5) return decReg(request);
+    else return decWord(request);
 }
 
-const push: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const push: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][(op >> 4) - 0xC];
-    return `\tPUSH ${word}`;
+    return {text: `\tPUSH ${word}`};
 }
 
-const pop: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const pop: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][(op >> 4) - 0xC];
-    return `\tPOP ${word}`;
+    return {text: `\tPOP ${word}`};
 }
 
-const incReg: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const incReg: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 4) >> 3];
-    return `\tINC ${reg}`
+    return {text: `\tINC ${reg}`};
 }
-const incWord: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const incWord: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
-    return `\tINC ${word}`;
+    return {text: `\tINC ${word}`};
 }
-const inc: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    if ((op & 7) === 4) return incReg(code);
-    else return incWord(code);
-}
-
-const ldh: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
-    if (op === 0xE0) return `\tLDH ($FF00+$${toHex(code[1])}),A`;
-    else return `\tLDH A,($FF00+$${toHex(code[1])})`;
+const inc: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    if ((op & 7) === 4) return incReg(request);
+    else return incWord(request);
 }
 
-const call: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const ldh: OpCodeFunction = request => {
+    const op: number = request.code[0];
+    if (op === 0xE0) return {text: `\tLDH ($FF00+$${toHex(request.code[1])}),A}`};
+    else return {text: `\tLDH A,($FF00+$${toHex(request.code[1])})`};
+}
+
+const call: OpCodeFunction = request => {
+    const op: number = request.code[0];
     let reg = '';
     switch (op) {
         case 0xC4: reg = 'NZ,'; break;
@@ -242,18 +242,17 @@ const call: ParsingFunction = code => {
         case 0xD4: reg = 'NC,'; break;
         case 0xDC: reg = 'C,'; break;
     }
-    return `\tCALL ${reg}$${toHex(toWord(code[1], code[2]))}`;
+    return {text: `\tCALL ${reg}$${toHex(toWord(request.code[1], request.code[2]))}`};
 }
 
-const cp: ParsingFunction = code => {
-    const op: number = code[0];
-    const cycles: number = CB_CYCLE_TABLE[op];
+const cp: OpCodeFunction = request => {
+    const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 7];
-    if (op === 0xFE) return `\tCP $${toHex(code[1])}`
-    else return `\tCP ${reg}`;
+    if (op === 0xFE) return {text: `\tCP $${toHex(request.code[1])}`};
+    else return {text: `\tCP ${reg}`};
 }
 
-const CB_TABLE: ParsingFunction[] = [
+const CB_TABLE: OpCodeFunction[] = [
     fail, fail, fail, fail, fail, fail, fail, fail,   // 0x00
     fail, fail, fail, fail, fail, fail, fail, fail, // 0x08
     rl, rl, rl, rl, rl, rl, rl, rl,                // 0x10
@@ -288,7 +287,7 @@ const CB_TABLE: ParsingFunction[] = [
     fail, fail, fail, fail, fail, fail, fail, fail  // 0xF8
 ];
 
-const PARSE_TABLE: ParsingFunction[] = [
+const PARSE_TABLE: OpCodeFunction[] = [
     fail, ld, ld, inc, inc, dec, ld, fail,     // 0x00
     fail, fail, ld, dec, inc, dec, ld, fail,   // 0x08
     fail, ld, ld, inc, inc, dec, ld, rla,     // 0x10
@@ -398,11 +397,23 @@ const tick = (program: Uint8Array): string => {
     let instructions: string[] = [];
     let i = 0;
     var cycle: number = 0;
+    var pc: PC = {
+        A: 0,
+        B: 0,
+        C: 0,
+        D: 0,
+        E: 0,
+        H: 0,
+        L: 0,
+        F: 0,
+        PC: 0,
+        SP: 0
+    };
     while (i < program.length) {
         var opcode: number = program[i];
         var size: number = INSTRUCTION_SIZE_TABLE[opcode];
         var code: Uint8Array = program.slice(i, i + size);
-        var parser: ParsingFunction = PARSE_TABLE[opcode];
+        var parser: OpCodeFunction = PARSE_TABLE[opcode];
         if (opcode == 0xCB) {
             opcode = program[++i];
             code = program.slice(i, i + size);
@@ -412,15 +423,16 @@ const tick = (program: Uint8Array): string => {
             console.error(`fail at $${toHex(opcode)}`);
             break;
         }
-        const response: ParseResponse = parser(code);
-        instructions.push(`${response.text}\t\t$${toHex(i)}\t${response.cycles} cycles`);
+        const response: OpCodeResponse = parser({code: code, pc: pc});
+        const cycles = PARSE_CYCLE_TABLE[opcode] + (response.cycles || 0);
+        instructions.push(`${response.text}\t\t$${toHex(i)}\t${cycles} cycles`);
         if (i === 0xA7) {
             instructions.push('~~~Gameboy logo data, skipping ahead~~~');
             i = 0xE0;
             continue;
         }
         i += size;
-        cycle += cycleCount;
+        cycle += cycles;
     }
     return instructions.reduce((a, b) => `${a}\n${b}`, "");
 }
