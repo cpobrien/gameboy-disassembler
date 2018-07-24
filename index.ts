@@ -6,7 +6,7 @@ const toWord = (lo: number, hi: number): number => hi << 8 | lo;
 const toHex = (num: number): string => num.toString(16);
 const toSigned = (num: number): number => ((~num & 0xFF) - 1) * ((num & 0x80) === 0 ? 1 : -1);
 
-type PC = {
+type Registers = {
     A: number,
     B: number,
     C: number,
@@ -15,7 +15,6 @@ type PC = {
     H: number,
     L: number,
     F: number,
-    PC: number,
     SP: number
 }
 
@@ -62,29 +61,38 @@ type OpCodeResponse = {
 
 type OpCodeRequest = {
     code: Uint8Array;
-    pc: PC;
+    computer: Computer;
 }
 
 type OpCodeFunction = {(code: OpCodeRequest): OpCodeResponse};
 
-const ret: OpCodeFunction = request => {
+function ret(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     switch (op) {
-        case 0xC0: return {text: `\tRET NZ`};
-        case 0xC8: return {text: `\tRET Z`};
-        case 0xC9: return {text: `\tRET`};
-        case 0xD0: return {text: `\tRET NC`};
-        case 0xD8: return {text: `\tRET C`};
-        case 0xD9: return {text: `\tRETI`};
-        default: return {text: `???`};
+        case 0xC0:
+            return {text: `\tRET NZ`};
+        case 0xC8:
+            return {text: `\tRET Z`};
+        case 0xC9:
+            return {text: `\tRET`};
+        case 0xD0:
+            return {text: `\tRET NC`};
+        case 0xD8:
+            return {text: `\tRET C`};
+        case 0xD9:
+            return {text: `\tRETI`};
+        default:
+            return {text: `???`};
     }
 }
 
-const addReg: OpCodeFunction = request => {
+
+function addReg(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     return {text: `\tADD A,${['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7]}`}
 }
-const add: OpCodeFunction = request => {
+
+function add(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     if ((op >> 4) === 8) return addReg(request);
     return {text: '???'};
@@ -105,30 +113,30 @@ const ldWordToA: OpCodeFunction = request => {
     const word: string = toHex(toWord(request.code[1], request.code[2]));
     if (op === 0xEA) return {text: `\tLD ($${word}),A`};
     else return {text: `\tLD A,($${word})`};
-}
+};
 
 const ldWord: OpCodeFunction = request => {
     const op: number = request.code[0];
     const loc: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
     const pos: string = toHex(toWord(request.code[1], request.code[2]));
     return {text: `\tLD ${loc},$${pos}`};
-}
+};
 
 const ldCombo: OpCodeFunction = request => {
     const op : number = request.code[0];
     const loc: string = ['(BC)', '(DE)', '(HL+)', '(HL-)'][op >> 4];
     if ((op & 0xF) == 0x2) return {text: `\tLD ${loc},A`};
     else return {text: `\tLD A,${loc}`};
-}
+};
 
 const sub: OpCodeFunction = request => {
     const op: number = request.code[0];
     var val: number | string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7];
     if (op == 0xD6) {
-        val = code[1];
+        val = request.code[1];
     }
     return {text: `\tSUB ${val}`};
-}
+};
 
 const ldReg: OpCodeFunction = request => {
     const op: number = request.code[0];
@@ -136,19 +144,19 @@ const ldReg: OpCodeFunction = request => {
     const from: string = regTable[(op - 0x40) >> 3];
     const to: string = regTable[op & 7]
     return {text: `\tLD ${from},${to}`};
-}
+};
 
 const ldByte: OpCodeFunction = request => {
     const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 6) >> 3];
     return {text: `\tLD ${reg},$${toHex(request.code[1])}`};
-}
+};
 
 const ldC: OpCodeFunction = request => {
     const op: number = request.code[0];
     if (op === 0xE2) return {text: `\tLD ($FF00+C),A`};
     else return {text: `\tLD A,$FF00+C)`};
-}
+};
 
 const ld: OpCodeFunction = request => {
     const op: number = request.code[0];
@@ -159,21 +167,25 @@ const ld: OpCodeFunction = request => {
     if (op === 0xE2 || op === 0xF2) return ldC(request);
     if (op === 0xEA || op === 0xFA) return ldWordToA(request);
     return {text: `\t???`};
-}
+};
+
 const jr: OpCodeFunction = request => {
     const opcode: number = request.code[0];
     let reg: string = ['', 'NZ', 'Z', 'NC', 'C'][(opcode - 0x18) >> 3];
     return {text: `\tJR ${reg + (reg === '' ? '': ',')}+$${toHex(request.code[1])}`};
 };
+
 const xor: OpCodeFunction = request => {
     const op: number = request.code[0];
     return {text: '\tXOR A'};
-}
+};
+
 const fail: OpCodeFunction = request => {
     const op: number = request.code[0];
     return {text: "UNKNOWN"} 
-}
-const bit: OpCodeFunction = request => {
+};
+
+function bit(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', '(HL)', 'A'][op & 7];
     const num: number = (op - 0x40) >> 3;
@@ -181,59 +193,61 @@ const bit: OpCodeFunction = request => {
     return {text: `\tBIT ${num},${reg}`};
 }
 
-const decWord: OpCodeFunction = request => {
+function decWord(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
     return {text: `\tDEC ${word}`};
 }
 
-const decReg: OpCodeFunction = request => {
+function decReg(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 5) >> 3];
     return {text: `\tDEC ${reg}`}
 }
 
-const dec: OpCodeFunction = request => {
+function dec(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     if ((op & 7) === 5) return decReg(request);
     else return decWord(request);
 }
 
-const push: OpCodeFunction = request => {
+function push(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][(op >> 4) - 0xC];
     return {text: `\tPUSH ${word}`};
 }
 
-const pop: OpCodeFunction = request => {
+function pop(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][(op >> 4) - 0xC];
     return {text: `\tPOP ${word}`};
 }
 
-const incReg: OpCodeFunction = request => {
+function incReg(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 4) >> 3];
     return {text: `\tINC ${reg}`};
 }
-const incWord: OpCodeFunction = request => {
+
+function incWord(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const word: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
     return {text: `\tINC ${word}`};
 }
+
 const inc: OpCodeFunction = request => {
     const op: number = request.code[0];
     if ((op & 7) === 4) return incReg(request);
     else return incWord(request);
-}
+};
 
 const ldh: OpCodeFunction = request => {
     const op: number = request.code[0];
     if (op === 0xE0) return {text: `\tLDH ($FF00+$${toHex(request.code[1])}),A}`};
     else return {text: `\tLDH A,($FF00+$${toHex(request.code[1])})`};
-}
+};
 
-const call: OpCodeFunction = request => {
+function call(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     let reg = '';
     switch (op) {
@@ -245,7 +259,7 @@ const call: OpCodeFunction = request => {
     return {text: `\tCALL ${reg}$${toHex(toWord(request.code[1], request.code[2]))}`};
 }
 
-const cp: OpCodeFunction = request => {
+function cp(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 7];
     if (op === 0xFE) return {text: `\tCP $${toHex(request.code[1])}`};
@@ -393,11 +407,26 @@ const INSTRUCTION_SIZE_TABLE: number[] = [
     0, 0, 3, 0, 0, 0, 2, 0  // 0xF8
 ];
 
-const tick = (program: Uint8Array): string => {
+class Computer {
+    private readonly program: Uint8Array;
+    public cycles: number = 0;
+    public PC: number = 0;
+    public registers: Registers;
+    constructor(program: Uint8Array, pc: Registers) {
+        this.program = program;
+        this.registers = pc;
+    }
+
+    public readWord(address: number): number { return 0; }
+    public readByte(address: number): number { return 0; }
+    public writeByte(address: number) { }
+    public writeWord(address: number) { }
+}
+
+function tick(program: Uint8Array): string {
     let instructions: string[] = [];
     let i = 0;
-    var cycle: number = 0;
-    var pc: PC = {
+    var pc: Registers = {
         A: 0,
         B: 0,
         C: 0,
@@ -406,35 +435,36 @@ const tick = (program: Uint8Array): string => {
         H: 0,
         L: 0,
         F: 0,
-        PC: 0,
         SP: 0
     };
-    while (pc.PC < program.length) {
-        var opcode: number = program[pc.PC];
+
+    let computer: Computer = new Computer(program, pc);
+    while (computer.PC < program.length) {
+        var opcode: number = program[computer.PC];
         var size: number = INSTRUCTION_SIZE_TABLE[opcode];
-        var code: Uint8Array = program.slice(pc.PC, pc.PC + size);
+        var code: Uint8Array = program.slice(computer.PC, computer.PC + size);
         var parser: OpCodeFunction = PARSE_TABLE[opcode];
         if (opcode == 0xCB) {
-            opcode = program[++pc.PC];
-            code = program.slice(pc.PC, pc.PC + size);
+            opcode = program[++computer.PC];
+            code = program.slice(computer.PC, computer.PC + size);
             parser = CB_TABLE[opcode];
         }
         if (parser === fail) {
             console.error(`fail at $${toHex(opcode)}`);
             break;
         }
-        const response: OpCodeResponse = parser({code: code, pc: pc});
+        const response: OpCodeResponse = parser({code: code, computer: computer});
         const cycles = PARSE_CYCLE_TABLE[opcode] + (response.cycles || 0);
-        instructions.push(`${response.text}\t\t$${toHex(pc.PC)}\t${cycles} cycles`);
-        if (pc.PC === 0xA7) {
+        instructions.push(`${response.text}\t\t$${toHex(computer.PC)}\t${cycles} cycles`);
+        if (computer.PC === 0xA7) {
             instructions.push('~~~Gameboy logo data, skipping ahead~~~');
-            pc.PC = 0xE0;
+            computer.PC = 0xE0;
             continue;
         }
-        pc.PC += size;
-        cycle += cycles;
+        computer.PC += size;
+        computer.cycles += cycles;
     }
-    return `${instructions.reduce((a, b) => `${a}\n${b}`, "")}\n\n\tcycles: ${cycle}`;
+    return `${instructions.reduce((a, b) => `${a}\n${b}`, "")}\n\n\tcycles: ${computer.cycles}`;
 }
 
 fs.readFile(PATH, (err: any, data: any) => {
