@@ -15,7 +15,6 @@ type Registers = {
     H: number,
     L: number,
     F: number,
-    SP: number
 }
 
 const CB_CYCLE_TABLE: number[] = [
@@ -56,6 +55,7 @@ const CB_CYCLE_TABLE: number[] = [
 
 type OpCodeResponse = {
     text: string,
+    visited?: boolean,
     cycles?: number
 };
 
@@ -100,7 +100,7 @@ function add(request: OpCodeRequest): OpCodeResponse {
 
 const rla: OpCodeFunction = request => {
     const op: number = request.code[0];
-  return {text: `\tRLA`};
+    return {text: `\tRLA`};
 }
 
 const rl: OpCodeFunction = request => {
@@ -116,10 +116,29 @@ const ldWordToA: OpCodeFunction = request => {
 };
 
 const ldWord: OpCodeFunction = request => {
+    // For loading words, the small bit represents which word is read from.
+    const BC: number = 0;
+    const DE: number = 1;
+    const HL: number = 2;
+    const SP: number = 3;
+
+    let computer: Computer = request.computer;
+
     const op: number = request.code[0];
+    const word: number = toWord(request.code[0], request.code[1]);
     const loc: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
-    const pos: string = toHex(toWord(request.code[1], request.code[2]));
-    return {text: `\tLD ${loc},$${pos}`};
+    const pos: string = toHex(word);
+    switch (op >> 4) {
+        case BC: computer.writeBC(word); break;
+        case DE: computer.writeDE(word); break;
+        case HL: computer.writeHL(word); break;
+        case SP: computer.SP = word; break;
+
+    }
+    return {
+        text: `\tLD ${loc},$${pos}`,
+        visited: true
+    };
 };
 
 const ldCombo: OpCodeFunction = request => {
@@ -182,7 +201,7 @@ const xor: OpCodeFunction = request => {
 
 const fail: OpCodeFunction = request => {
     const op: number = request.code[0];
-    return {text: "UNKNOWN"} 
+    return {text: "UNKNOWN"}
 };
 
 function bit(request: OpCodeRequest): OpCodeResponse {
@@ -235,11 +254,11 @@ function incWord(request: OpCodeRequest): OpCodeResponse {
     return {text: `\tINC ${word}`};
 }
 
-const inc: OpCodeFunction = request => {
+function inc(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
     if ((op & 7) === 4) return incReg(request);
     else return incWord(request);
-};
+}
 
 const ldh: OpCodeFunction = request => {
     const op: number = request.code[0];
@@ -369,7 +388,7 @@ const PARSE_CYCLE_TABLE: number[] = [
     16, 4, 16, -1, -1, -1, 8, 16,
     12, 12, 8, 4, -1, 16, 8, 16,
     12, 8, 16, 4, -1, -1, 8, 16
-  ];
+];
 
 
 const INSTRUCTION_SIZE_TABLE: number[] = [
@@ -411,6 +430,7 @@ class Computer {
     private readonly program: Uint8Array;
     public cycles: number = 0;
     public PC: number = 0;
+    public SP: number = 0;
     public registers: Registers;
     constructor(program: Uint8Array, pc: Registers) {
         this.program = program;
@@ -419,8 +439,57 @@ class Computer {
 
     public readWord(address: number): number { return 0; }
     public readByte(address: number): number { return 0; }
-    public writeByte(address: number) { }
-    public writeWord(address: number) { }
+    public writeByte(address: number, byte: number) {
+        assertWord(address);
+        assertByte(byte);
+        this.program[address] = byte;
+    }
+    public writeWord(address: number, word: number) {
+        const lo: number = word & 0xFF;
+        const hi: number = word >> 4;
+        this.writeByte(address, lo);
+        this.writeByte(address + 1, hi);
+    }
+
+    public combineBC = (): number => (this.registers.B << 4) | this.registers.C;
+    public combineDE = (): number => (this.registers.D << 4) | this.registers.E;
+    public combineHL = (): number => (this.registers.H << 4) | this.registers.L;
+
+    public writeBC(word: number) {
+        assertWord(word);
+        const lo: number = word & 0xFF;
+        const hi: number = word >> 4;
+        this.registers.B = lo;
+        this.registers.C = hi;
+    }
+
+    public writeDE(word: number) {
+        assertWord(word);
+        const lo: number = word & 0xFF;
+        const hi: number = word >> 4;
+        this.registers.D = lo;
+        this.registers.E = hi;
+    }
+
+    public writeHL(word: number) {
+        assertWord(word);
+        const lo: number = word & 0xFF;
+        const hi: number = word >> 4;
+        this.registers.H = lo;
+        this.registers.L = hi;
+    }
+}
+
+function assertByte(byte: number) {
+    if (byte < 0x00 || byte > 0xFF) {
+        throw new Error('Not a byte!');
+    }
+}
+
+function assertWord(word: number) {
+    if (word < 0x00 || word > 0xFFFF) {
+        throw new Error('Not a word!');
+    }
 }
 
 function tick(program: Uint8Array): string {
@@ -435,7 +504,6 @@ function tick(program: Uint8Array): string {
         H: 0,
         L: 0,
         F: 0,
-        SP: 0
     };
 
     let computer: Computer = new Computer(program, pc);
@@ -444,7 +512,9 @@ function tick(program: Uint8Array): string {
         var size: number = INSTRUCTION_SIZE_TABLE[opcode];
         var code: Uint8Array = program.slice(computer.PC, computer.PC + size);
         var parser: OpCodeFunction = PARSE_TABLE[opcode];
+        var cycles = PARSE_CYCLE_TABLE[opcode];
         if (opcode == 0xCB) {
+            cycles = CB_CYCLE_TABLE[opcode];
             opcode = program[++computer.PC];
             code = program.slice(computer.PC, computer.PC + size);
             parser = CB_TABLE[opcode];
@@ -454,7 +524,7 @@ function tick(program: Uint8Array): string {
             break;
         }
         const response: OpCodeResponse = parser({code: code, computer: computer});
-        const cycles = PARSE_CYCLE_TABLE[opcode] + (response.cycles || 0);
+        cycles += response.cycles || 0;
         instructions.push(`${response.text}\t\t$${toHex(computer.PC)}\t${cycles} cycles`);
         if (computer.PC === 0xA7) {
             instructions.push('~~~Gameboy logo data, skipping ahead~~~');
@@ -463,6 +533,10 @@ function tick(program: Uint8Array): string {
         }
         computer.PC += size;
         computer.cycles += cycles;
+        if (!response.visited) {
+            console.error(`Break at $${toHex(computer.PC)}`);
+            break;
+        }
     }
     return `${instructions.reduce((a, b) => `${a}\n${b}`, "")}\n\n\tcycles: ${computer.cycles}`;
 }
