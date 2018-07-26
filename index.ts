@@ -5,6 +5,8 @@ const PATH = './boot.gb';
 const toWord = (lo: number, hi: number): number => hi << 8 | lo;
 const toHex = (num: number): string => num.toString(16);
 const toSigned = (num: number): number => ((~num & 0xFF) - 1) * ((num & 0x80) === 0 ? 1 : -1);
+const clampByte = (num: number): number => num & 0xFF;
+const clampWord = (num: number): number => num & 0xFF;
 
 type Registers = {
     A: number,
@@ -196,7 +198,23 @@ const jr: OpCodeFunction = request => {
 
 const xor: OpCodeFunction = request => {
     const op: number = request.code[0];
-    return {text: '\tXOR A'};
+    const computer: Computer = request.computer;
+    const comparison: number = [
+        computer.registers.B,
+        computer.registers.C,
+        computer.registers.D,
+        computer.registers.E,
+        computer.registers.H,
+        computer.registers.L,
+        computer.readByte(computer.combineHL()),
+        computer.registers.A,
+    ][op % 8];
+    computer.registers.A ^= comparison;
+    computer.registers.A = clampByte(computer.registers.A);
+    return {
+        text: '\tXOR A',
+        visited: true
+    };
 };
 
 const fail: OpCodeFunction = request => {
