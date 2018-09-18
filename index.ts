@@ -152,7 +152,6 @@ const ldCombo: OpCodeFunction = request => {
 
     const op : number = request.code[0];
     var address: number = -1;
-    const value: number = computer.registers.A;
     switch (op) {
         case BC:
             address = computer.combineBC();
@@ -199,15 +198,46 @@ const ldReg: OpCodeFunction = request => {
 };
 
 const ldByte: OpCodeFunction = request => {
+    const B: number = 0x06;
+    const C: number = 0x0E;
+    const D: number = 0x16;
+    const E: number = 0x1E;
+    const H: number = 0x26;
+    const L: number = 0x2E;
+    const HL: number = 0x36;
+    const A: number = 0x3E;
+
+    const computer: Computer = request.computer;
     const op: number = request.code[0];
+    const byte: number = request.code[1];
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 6) >> 3];
-    return {text: `\tLD ${reg},$${toHex(request.code[1])}`};
+    switch (op) {
+        case B: computer.registers.B = byte; break;
+        case D: computer.registers.D = byte; break;
+        case H: computer.registers.H = byte; break;
+        case C: computer.registers.C = byte; break;
+        case E: computer.registers.E = byte; break;
+        case L: computer.registers.L = byte; break;
+        case A: computer.registers.A = byte; break;
+        case HL:
+            const address: number = computer.combineHL();
+            computer.writeByte(address, byte);
+            break;
+    }
+    return {text: `\tLD ${reg},$${toHex(request.code[1])}`, visited: true};
 };
 
 const ldC: OpCodeFunction = request => {
+    const computer: Computer = request.computer;
     const op: number = request.code[0];
-    if (op === 0xE2) return {text: `\tLD ($FF00+C),A`};
-    else return {text: `\tLD A,$FF00+C)`};
+    const address: number = 0xFF00 | computer.registers.C;
+    if (op === 0xE2) {
+        computer.registers.A = computer.readByte(address);
+        return {text: `\tLD ($FF00+C),A`, visited: true};
+    } else {
+        computer.writeByte(address, computer.registers.A);
+        return {text: `\tLD A,$FF00+C)`, visited: true};
+    }
 };
 
 const ld: OpCodeFunction = request => {
@@ -614,7 +644,6 @@ function assertWord(word: number) {
 
 function tick(program: Uint8Array): string {
     let instructions: string[] = [];
-    let i = 0;
     var pc: Registers = {
         A: 0,
         B: 0,
