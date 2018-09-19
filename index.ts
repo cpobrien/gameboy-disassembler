@@ -195,11 +195,46 @@ const sub: OpCodeFunction = request => {
 };
 
 const ldReg: OpCodeFunction = request => {
+    const B: number = 0x00;
+    const C: number = 0x01;
+    const D: number = 0x02;
+    const E: number = 0x03;
+    const H: number = 0x04;
+    const L: number = 0x05;
+    const HL: number = 0x06;
+    const A: number = 0x07;
     const op: number = request.code[0];
-    const regTable: string[] = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'];
-    const from: string = regTable[(op - 0x40) >> 3];
-    const to: string = regTable[op & 7];
-    return {text: `\tLD ${from},${to}`};
+
+    const computer: Computer = request.computer;
+    const register: Registers = computer.registers;
+
+    const regTableText: string[] = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'];
+    const fromText: string = regTableText[(op - 0x40) >> 3];
+    const toText: string = regTableText[op & 7];
+
+    const byte: number = [
+        register.B,
+        register.C,
+        register.D,
+        register.E,
+        register.H,
+        register.L,
+        computer.readByte(computer.combineHL()),
+        register.A,
+    ][op & 7];
+
+    switch ((op - 0x40) >> 3) {
+        case B: register.B = byte; break;
+        case C: register.C = byte; break;
+        case D: register.D = byte; break;
+        case E: register.E = byte; break;
+        case H: register.H = byte; break;
+        case L: register.L = byte; break;
+        case HL: computer.writeByte(computer.combineHL(), byte); break;
+        case A: register.A = byte; break;
+    }
+
+    return {text: `\tLD ${fromText},${toText}`, visited: true};
 };
 
 const ldByte: OpCodeFunction = request => {
@@ -722,12 +757,12 @@ function tick(program: Uint8Array): string {
             computer.PC = 0xE0;
             continue;
         }
-        computer.PC += size;
-        computer.cycles += cycles;
         if (!response.visited) {
             message = `Break at position $${toHex(computer.PC)}, opcode $${toHex(opcode)} (${parser.name})`;
             break;
         }
+        computer.PC += size;
+        computer.cycles += cycles;
     }
     return `${instructions.reduce((a, b) => `${a}\n${b}`, "")}\n\n\tcycles: ${computer.cycles}\n\n\t${message}`;
 }
