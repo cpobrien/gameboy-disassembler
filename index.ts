@@ -7,6 +7,11 @@ const toHex = (num: number): string => num.toString(16);
 const toSigned = (num: number): number => ((~num & 0xFF) - 1) * ((num & 0x80) === 0 ? 1 : -1);
 const clampByte = (num: number): number => num & 0xFF;
 const clampWord = (num: number): number => num & 0xFFFF;
+function calculateHalfBit(num: number): number {
+    const higherNibbleCarried: boolean = (num & 0xFF) !== num;
+    const lowerNibbleCarried: boolean = (num & 0x0F) !== num;
+    return lowerNibbleCarried && !higherNibbleCarried ? 1 : 0;
+}
 
 type Registers = {
     A: number,
@@ -350,9 +355,45 @@ function pop(request: OpCodeRequest): OpCodeResponse {
 }
 
 function incReg(request: OpCodeRequest): OpCodeResponse {
+    const B: number = 0x04;
+    const C: number = 0x0C;
+    const D: number = 0x14;
+    const E: number = 0x1C;
+    const H: number = 0x24;
+    const L: number = 0x2C;
+    const HL: number = 0x34;
+    const A: number = 0x4C;
+
     const op: number = request.code[0];
+    const computer: Computer = request.computer;
+    const registers: Registers = computer.registers;
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 4) >> 3];
-    return {text: `\tINC ${reg}`};
+    let byte : number = [
+        registers.B,
+        registers.C,
+        registers.D,
+        registers.E,
+        registers.H,
+        registers.L,
+        computer.readByte(computer.combineHL()),
+        registers.A,
+    ][(op - 4) >> 3];
+    byte++;
+    computer.setZ(clampByte(byte) === 0 ? 1 : 0);
+    computer.setN(0);
+    computer.setH(calculateHalfBit(byte));
+    byte = clampByte(byte);
+    switch (op) {
+        case B: registers.B = byte; break;
+        case C: registers.C = byte; break;
+        case D: registers.D = byte; break;
+        case E: registers.E = byte; break;
+        case H: registers.H = byte; break;
+        case L: registers.L = byte; break;
+        case A: registers.A = byte; break;
+        case HL: computer.writeByte(computer.combineHL(), byte); break;
+    }
+    return {text: `\tINC ${reg}`, visited: true};
 }
 
 function incWord(request: OpCodeRequest): OpCodeResponse {
