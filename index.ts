@@ -1,4 +1,5 @@
 import fs from 'fs';
+import {isNumber} from "util";
 
 const PATH = './boot.gb';
 
@@ -150,14 +151,14 @@ const ldWord: OpCodeFunction = request => {
 
 const ldCombo: OpCodeFunction = request => {
     const computer: Computer = request.computer;
-    const BC: number = 0x02;
-    const DE: number = 0x12;
-    const HL_INC: number = 0x22;
-    const HL_DEC: number = 0x32;
+    const BC: number = 0x00;
+    const DE: number = 0x01;
+    const HL_INC: number = 0x02;
+    const HL_DEC: number = 0x03;
 
     const op : number = request.code[0];
     var address: number = -1;
-    switch (op) {
+    switch (op >> 4) {
         case BC:
             address = computer.combineBC();
             break;
@@ -379,8 +380,15 @@ function dec(request: OpCodeRequest): OpCodeResponse {
 
 function push(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
-    const word: string = ['BC', 'DE', 'HL', 'SP'][(op >> 4) - 0xC];
-    return {text: `\tPUSH ${word}`};
+    const computer: Computer = request.computer;
+
+    const wordString: string = ['BC', 'DE', 'HL', 'SP'][(op >> 4) - 0xC];
+    const word: number = [computer.combineBC(),
+        computer.combineDE(),
+        computer.combineHL(),
+        computer.SP][(op >> 4) - 0xC];
+    computer.pushWord(word);
+    return {text: `\tPUSH ${wordString}`, visited: true};
 }
 
 function pop(request: OpCodeRequest): OpCodeResponse {
@@ -444,21 +452,61 @@ function inc(request: OpCodeRequest): OpCodeResponse {
 }
 
 const ldh: OpCodeFunction = request => {
+    const computer: Computer = request.computer;
+    const registers: Registers = computer.registers;
     const op: number = request.code[0];
-    if (op === 0xE0) return {text: `\tLDH ($FF00+$${toHex(request.code[1])}),A}`};
-    else return {text: `\tLDH A,($FF00+$${toHex(request.code[1])})`};
+    const lowByte: number = request.code[1];
+    const address: number = 0xFF00 | lowByte;
+    if (op === 0xE0) {
+        registers.A = computer.readByte(address);
+        return {text: `\tLDH ($FF00+$${toHex(request.code[1])}),A}`, visited: true};
+    } else {
+        computer.writeByte(address, registers.A);
+        return {text: `\tLDH A,($FF00+$${toHex(request.code[1])})`, visited: true};
+    }
 };
 
 function call(request: OpCodeRequest): OpCodeResponse {
+    const NZ: number = 0xC4;
+    const Z: number = 0xCC;
+    const NC: number = 0xD4;
+    const C: number = 0xDC;
+
+    const computer: Computer = request.computer;
     const op: number = request.code[0];
-    let reg = '';
+    const address: number = toWord(request.code[1], request.code[2]);
+
+    var jump: boolean = true;
+    let regString: string = '';
     switch (op) {
-        case 0xC4: reg = 'NZ,'; break;
-        case 0xCC: reg = 'Z,'; break;
-        case 0xD4: reg = 'NC,'; break;
-        case 0xDC: reg = 'C,'; break;
+        case NZ:
+            jump = !computer.getZ();
+            regString = 'NZ,';
+            break;
+        case Z:
+            jump = computer.getZ();
+            regString = 'Z,';
+            break;
+        case NC:
+            jump = !computer.getC();
+            regString = 'NC,';
+            break;
+        case C:
+            jump = computer.getC();
+            regString = 'C,';
+            break;
+        default: break;
     }
-    return {text: `\tCALL ${reg}$${toHex(toWord(request.code[1], request.code[2]))}`};
+    const cycles: number = jump && op != 0xCD ? 12 : 0;
+    if (jump) {
+        computer.pushWord(computer.PC + 3);
+        computer.PC = address - 3;
+    }
+    return {
+        text: `\tCALL ${regString}$${toHex(toWord(request.code[1], request.code[2]))}`,
+        cycles: cycles,
+        visited: true
+    };
 }
 
 function cp(request: OpCodeRequest): OpCodeResponse {
@@ -539,38 +587,38 @@ const PARSE_TABLE: OpCodeFunction[] = [
 ];
 
 const PARSE_CYCLE_TABLE: number[] = [
-    4, 12, 8, 8, 4, 4, 8, 4,
-    20, 8, 8, 8, 4, 4, 8, 4,
-    4, 12, 8, 8, 4, 4, 8, 4,
-    12, 8, 8, 8, 4, 4, 8, 4,
-    12, 12, 8, 8, 4, 4, 8, 4,
-    12, 8, 8, 8, 4, 4, 8, 4,
-    12, 12, 8, 8, 12, 12, 12, 4,
-    12, 8, 8, 8, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    8, 8, 8, 8, 8, 8, 4, 8,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    4, 4, 4, 4, 4, 4, 8, 4,
-    20, 12, 16, 16, 24, 16, 8, 16,
-    20, 16, 16, 4, 24, 24, 8, 16,
-    20, 12, 16, -1, 24, 16, 8, 16,
-    20, 16, 16, -1, 24, -1, 8, 16,
-    12, 12, 8, -1, -1, 16, 8, 16,
-    16, 4, 16, -1, -1, -1, 8, 16,
-    12, 12, 8, 4, -1, 16, 8, 16,
-    12, 8, 16, 4, -1, -1, 8, 16
+    4, 12, 8, 8, 4, 4, 8, 4,       // 0x00
+    20, 8, 8, 8, 4, 4, 8, 4,       // 0x08
+    4, 12, 8, 8, 4, 4, 8, 4,       // 0x10
+    12, 8, 8, 8, 4, 4, 8, 4,       // 0x18
+    12, 12, 8, 8, 4, 4, 8, 4,      // 0x20
+    12, 8, 8, 8, 4, 4, 8, 4,       // 0x28
+    12, 12, 8, 8, 12, 12, 12, 4,   // 0x30
+    12, 8, 8, 8, 4, 4, 8, 4,       // 0x38
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x40
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x48
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x50
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x58
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x60
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x68
+    8, 8, 8, 8, 8, 8, 4, 8,        // 0x70
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x78
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x80
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x88
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x90
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0x98
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0xA0
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0xA8
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0xB0
+    4, 4, 4, 4, 4, 4, 8, 4,        // 0xB8
+    20, 12, 16, 16, 24, 16, 8, 16, // 0xC0
+    20, 16, 16, 4, 24, 24, 8, 16,  // 0xC8
+    20, 12, 16, -1, 24, 16, 8, 16, // 0xD0
+    20, 16, 16, -1, 24, -1, 8, 16, // 0xD8
+    12, 12, 8, -1, -1, 16, 8, 16,  // 0xE0
+    16, 4, 16, -1, -1, -1, 8, 16,  // 0xE8
+    12, 12, 8, 4, -1, 16, 8, 16,   // 0xF0
+    12, 8, 16, 4, -1, -1, 8, 16    // 0xF0
 ];
 
 
@@ -696,6 +744,29 @@ class Computer {
 
     public getC(): boolean {
         return (this.registers.F & (1 << 4)) !== 0;
+    }
+
+    public pushWord(number: number) {
+        assertWord(number);
+        const hi: number = number & 0xFF;
+        const lo: number = (number >> 8);
+        this.pushByte(lo);
+        this.pushByte(hi);
+    }
+
+    public pushByte(number: number) {
+        assertByte(number);
+        this.writeByte(--this.SP, number);
+    }
+
+    public popWord(): number {
+        const hi: number = this.popByte();
+        const lo: number = this.popByte();
+        return toWord(lo, hi);
+    }
+
+    public popByte(): number {
+        return this.readByte(this.SP++)
     }
 }
 
