@@ -1,5 +1,4 @@
 import fs from 'fs';
-import {isNumber} from "util";
 
 const PATH = './boot.gb';
 
@@ -8,10 +7,17 @@ const toHex = (num: number): string => num.toString(16);
 const toSigned = (num: number): number => ((~num & 0xFF) - 1) * ((num & 0x80) === 0 ? 1 : -1);
 const clampByte = (num: number): number => num & 0xFF;
 const clampWord = (num: number): number => num & 0xFFFF;
-function calculateHalfBit(num: number): number {
+function calculateHalfBit(num: number): boolean {
     const higherNibbleCarried: boolean = (num & 0xFF) !== num;
     const lowerNibbleCarried: boolean = (num & 0x0F) !== num;
-    return lowerNibbleCarried && !higherNibbleCarried ? 1 : 0;
+    return lowerNibbleCarried && !higherNibbleCarried;
+}
+
+type Flags = {
+    Z: boolean,
+    N: boolean,
+    H: boolean,
+    C: boolean
 }
 
 type Registers = {
@@ -107,13 +113,64 @@ function add(request: OpCodeRequest): OpCodeResponse {
 }
 
 const rla: OpCodeFunction = request => {
-    const op: number = request.code[0];
-    return {text: `\tRLA`};
+    const computer: Computer = request.computer;
+    const register: Registers = computer.registers;
+
+    const carry: boolean = (register.A & 0x80) !== 0;
+    register.A = clampByte(register.A << 1);
+    computer.setZ(false);
+    computer.setN(false);
+    computer.setH(false);
+    computer.setC(carry);
+    return {text: `\tRLA`, visited: true};
 };
 
 const rl: OpCodeFunction = request => {
+    const B: number = 0x10;
+    const C: number = 0x11;
+    const D: number = 0x12;
+    const E: number = 0x13;
+    const H: number = 0x14;
+    const L: number = 0x15;
+    const HL: number = 0x16;
+    const A: number = 0x17;
+
     const op: number = request.code[0];
-    return {text: `\tRL ${['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7]}`};
+    const computer: Computer = request.computer;
+    const registers: Registers = computer.registers;
+
+    const register: number = [
+        registers.B,
+        registers.C,
+        registers.D,
+        registers.E,
+        registers.H,
+        registers.L,
+        computer.readByte(computer.combineHL()),
+        registers.A,
+    ][op & 0x7];
+
+
+    const carry: boolean = (register & 0x80) !== 0;
+    const rotated: number = clampByte(register << 1);
+    const zero: boolean = rotated === 0;
+
+    switch (op) {
+        case B: registers.B = rotated; break;
+        case C: registers.C = rotated; break;
+        case D: registers.D = rotated; break;
+        case E: registers.E = rotated; break;
+        case H: registers.H = rotated; break;
+        case L: registers.L = rotated; break;
+        case HL: computer.writeByte(computer.combineHL(), rotated); break;
+        case A: registers.A = rotated; break;
+    }
+    computer.setZ(zero);
+    computer.setN(false);
+    computer.setH(false);
+    computer.setC(carry);
+
+    return {text: `\tRL ${['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 0x7]}`, visited: true};
 };
 
 const ldWordToA: OpCodeFunction = request => {
@@ -355,27 +412,9 @@ function bit(request: OpCodeRequest): OpCodeResponse {
         registers.A
     ][op & 7];
     const num: number = (op - 0x40) >> 3;
-    const flag = (register & (1 << num)) === 0 ? 1 : 0;
+    const flag : boolean = (register & (1 << num)) === 0;
     computer.setZ(flag);
     return {text: `\tBIT ${num},${regString}`, visited: true};
-}
-
-function decWord(request: OpCodeRequest): OpCodeResponse {
-    const op: number = request.code[0];
-    const word: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
-    return {text: `\tDEC ${word}`};
-}
-
-function decReg(request: OpCodeRequest): OpCodeResponse {
-    const op: number = request.code[0];
-    const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 5) >> 3];
-    return {text: `\tDEC ${reg}`}
-}
-
-function dec(request: OpCodeRequest): OpCodeResponse {
-    const op: number = request.code[0];
-    if ((op & 7) === 5) return decReg(request);
-    else return decWord(request);
 }
 
 function push(request: OpCodeRequest): OpCodeResponse {
@@ -392,10 +431,85 @@ function push(request: OpCodeRequest): OpCodeResponse {
 }
 
 function pop(request: OpCodeRequest): OpCodeResponse {
+    const BC: number = 0;
+    const DE: number = 1;
+    const HL: number = 2;
+    const AF: number = 3;
+
+    const computer: Computer = request.computer;
     const op: number = request.code[0];
-    const word: string = ['BC', 'DE', 'HL', 'SP'][(op >> 4) - 0xC];
-    return {text: `\tPOP ${word}`};
+    const combined: string = ['BC', 'DE', 'HL', 'AF'][(op >> 4) - 0xC];
+    const word: number = computer.popWord();
+
+    switch ((op >> 4) - 0xC) {
+        case BC: computer.writeBC(word); break;
+        case DE: computer.writeDE(word); break;
+        case HL: computer.writeHL(word); break;
+        case AF: computer.writeAF(word); break;
+        default: throw new Error("???")
+    }
+    return {text: `\tPOP ${combined}`, visited: true};
 }
+
+function decWord(request: OpCodeRequest): OpCodeResponse {
+    const op: number = request.code[0];
+    const word: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
+
+    return {text: `\tDEC ${word}`};
+}
+
+function decReg(request: OpCodeRequest): OpCodeResponse {
+    const B: number = 0x5;
+    const C: number = 0xD;
+    const D: number = 0x15;
+    const E: number = 0x1D;
+    const H: number = 0x25;
+    const L: number = 0x2D;
+    const HL: number = 0x35;
+    const A: number = 0x3D;
+
+    const computer: Computer = request.computer;
+    const register: Registers = computer.registers;
+    const op: number = request.code[0];
+    const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][(op - 5) >> 3];
+    let byte: number = [
+        register.B,
+        register.C,
+        register.D,
+        register.E,
+        register.H,
+        register.L,
+        computer.readByte(computer.combineHL()),
+        register.A,
+    ][(op - 5) >> 3];
+
+    byte--;
+    computer.setZ(clampByte(byte) === 0);
+    computer.setN(true);
+    computer.setH(calculateHalfBit(byte));
+    byte = clampByte(byte);
+
+    switch (op) {
+        case B: register.B = byte; break;
+        case C: register.C = byte; break;
+        case D: register.D = byte; break;
+        case E: register.E = byte; break;
+        case H: register.H = byte; break;
+        case L: register.L = byte; break;
+        case HL: computer.writeByte(computer.combineHL(), byte); break;
+        case A: register.A = byte; break;
+        default: throw "???";
+    }
+    
+    return {text: `\tDEC ${reg}`, visited: true};
+}
+
+function dec(request: OpCodeRequest): OpCodeResponse {
+    const op: number = request.code[0];
+    if ((op & 7) === 5) return decReg(request);
+    else return decWord(request);
+}
+
 
 function incReg(request: OpCodeRequest): OpCodeResponse {
     const B: number = 0x04;
@@ -422,8 +536,8 @@ function incReg(request: OpCodeRequest): OpCodeResponse {
         registers.A,
     ][(op - 4) >> 3];
     byte++;
-    computer.setZ(clampByte(byte) === 0 ? 1 : 0);
-    computer.setN(0);
+    computer.setZ(clampByte(byte) === 0);
+    computer.setN(false);
     computer.setH(calculateHalfBit(byte));
     byte = clampByte(byte);
     switch (op) {
@@ -658,18 +772,33 @@ const INSTRUCTION_SIZE_TABLE: number[] = [
 ];
 
 class Computer {
-    private readonly program: Uint8Array;
+    private program: Uint8Array;
     public cycles: number = 0;
     public PC: number = 0;
     public SP: number = 0;
     public registers: Registers;
-    constructor(program: Uint8Array, pc: Registers) {
-        this.program = program;
+    private flags: Flags;
+    constructor(program: Uint8Array, pc: Registers, flags: Flags) {
+        this.program = new Uint8Array(0xFFFF);
+        for (var i: number = 0; i < program.length; i++) {
+            this.program[i] = program[i];
+        }
         this.registers = pc;
+        this.flags = flags;
     }
 
-    public readWord(address: number): number { return 0; }
-    public readByte(address: number): number { return 0; }
+    public readWord(address: number): number {
+        assertWord(address);
+        assertWord(address + 1);
+        const lo: number = this.readByte(address);
+        const hi: number = this.readByte(address + 1);
+        return (hi << 8) | lo;
+    }
+    public readByte(address: number): number {
+        assertWord(address);
+        return this.program[address];
+    }
+
     public writeByte(address: number, byte: number) {
         assertWord(address);
         assertByte(byte);
@@ -677,7 +806,7 @@ class Computer {
     }
     public writeWord(address: number, word: number) {
         const lo: number = word & 0xFF;
-        const hi: number = word >> 4;
+        const hi: number = word >> 8;
         this.writeByte(address, lo);
         this.writeByte(address + 1, hi);
     }
@@ -685,71 +814,76 @@ class Computer {
     public combineBC = (): number => (this.registers.B << 8) | this.registers.C;
     public combineDE = (): number => (this.registers.D << 8) | this.registers.E;
     public combineHL = (): number => (this.registers.H << 8) | this.registers.L;
+    public combineAF = (): number => (this.registers.A << 8) | this.registers.F;
+
+    public writeAF(word: number) {
+        assertWord(word);
+        const lo: number = word & 0xFF;
+        const hi: number = word >> 8;
+        this.registers.A = hi;
+        this.registers.F = lo;
+    }
 
     public writeBC(word: number) {
         assertWord(word);
-        const hi: number = word & 0xFF;
-        const lo: number = word >> 8;
-        this.registers.B = lo;
-        this.registers.C = hi;
+        const lo: number = word & 0xFF;
+        const hi: number = word >> 8;
+        this.registers.B = hi;
+        this.registers.C = lo;
     }
 
     public writeDE(word: number) {
         assertWord(word);
-        const hi: number = word & 0xFF;
-        const lo: number = word >> 8;
-        this.registers.D = lo;
-        this.registers.E = hi;
+        const lo: number = word & 0xFF;
+        const hi: number = word >> 8;
+        this.registers.D = hi;
+        this.registers.E = lo;
     }
 
     public writeHL(word: number) {
         assertWord(word);
-        const hi: number = word & 0xFF;
-        const lo: number = (word >> 8);
-        this.registers.H = lo;
-        this.registers.L = hi;
+        const lo: number = word & 0xFF;
+        const hi: number = (word >> 8);
+        this.registers.H = hi;
+        this.registers.L = lo;
     }
 
-    public setZ(bit: number) {
-        assertBit(bit);
-        this.registers.F = this.registers.F | (bit << 7);
+    public setZ(bit: boolean) {
+        this.flags.Z = bit;
     }
 
-    public setN(bit: number) {
-        assertBit(bit);
-        this.registers.F &= bit << 6;
+    public setN(bit: boolean) {
+        this.flags.N = bit;
     }
 
-    public setH(bit: number) {
-        assertBit(bit);
-        this.registers.F &= bit << 5;
+    public setH(bit: boolean) {
+        this.flags.H = bit;
     }
 
-    public setC(bit: number) {
-        assertBit(bit);
-        this.registers.F &= bit << 4;
+    public setC(bit: boolean) {
+        this.flags.C = bit;
     }
 
     public getZ(): boolean {
-        return (this.registers.F & (1 << 7)) !== 0;
+        return this.flags.Z;
     }
 
     public getN(): boolean {
-        return (this.registers.F & (1 << 6)) !== 0;
+        return this.flags.N;
     }
 
     public getH(): boolean {
-        return (this.registers.F & (1 << 5)) !== 0;
+        return this.flags.H;
     }
 
     public getC(): boolean {
-        return (this.registers.F & (1 << 4)) !== 0;
+        return this.flags.C;
     }
 
     public pushWord(number: number) {
         assertWord(number);
-        const hi: number = number & 0xFF;
-        const lo: number = (number >> 8);
+        const lo: number = number & 0xFF;
+        const hi: number = (number >> 8);
         this.pushByte(lo);
         this.pushByte(hi);
     }
@@ -801,8 +935,13 @@ function tick(program: Uint8Array): string {
         L: 0,
         F: 0,
     };
-
-    let computer: Computer = new Computer(program, pc);
+    var flags: Flags = {
+        Z: false,
+        N: false,
+        H: false,
+        C: false
+    };
+    let computer: Computer = new Computer(program, pc, flags);
     var message: string = "";
     while (computer.PC < program.length) {
         var opcode: number = program[computer.PC];
