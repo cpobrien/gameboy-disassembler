@@ -7,6 +7,7 @@ const toHex = (num: number): string => num.toString(16);
 const toSigned = (num: number): number => ((~num & 0xFF) - 1) * ((num & 0x80) === 0 ? 1 : -1);
 const clampByte = (num: number): number => num & 0xFF;
 const clampWord = (num: number): number => num & 0xFFFF;
+const calculateCarryBit = (num: number): boolean => (num & 0x80) !== 0;
 function calculateHalfBit(num: number): boolean {
     const higherNibbleCarried: boolean = (num & 0xFF) !== num;
     const lowerNibbleCarried: boolean = (num & 0x0F) !== num;
@@ -116,7 +117,7 @@ const rla: OpCodeFunction = request => {
     const computer: Computer = request.computer;
     const register: Registers = computer.registers;
 
-    const carry: boolean = (register.A & 0x80) !== 0;
+    const carry: boolean = calculateCarryBit(register.A);
     register.A = clampByte(register.A << 1);
     computer.setZ(false);
     computer.setN(false);
@@ -151,7 +152,7 @@ const rl: OpCodeFunction = request => {
     ][op & 0x7];
 
 
-    const carry: boolean = (register & 0x80) !== 0;
+    const carry: boolean = calculateCarryBit(register);
     const rotated: number = clampByte(register << 1);
     const zero: boolean = rotated === 0;
 
@@ -554,9 +555,28 @@ function incReg(request: OpCodeRequest): OpCodeResponse {
 }
 
 function incWord(request: OpCodeRequest): OpCodeResponse {
+    const BC: number = 0;
+    const DE: number = 1;
+    const HL: number = 2;
+    const SP: number = 3;
+
+    const computer: Computer = request.computer;
     const op: number = request.code[0];
-    const word: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
-    return {text: `\tINC ${word}`};
+    const wordString: string = ['BC', 'DE', 'HL', 'SP'][op >> 4];
+    const word: number = [
+        computer.combineBC(),
+        computer.combineDE(),
+        computer.combineHL(),
+        computer.SP,
+    ][op >> 4];
+    const incWord: number = clampWord(word + 1);
+    switch (op >> 4) {
+        case BC: computer.writeBC(incWord); break;
+        case DE: computer.writeBC(incWord); break;
+        case HL: computer.writeBC(incWord); break;
+        case SP: computer.writeBC(incWord); break;
+    }
+    return {text: `\tINC ${wordString}`, visited: true};
 }
 
 function inc(request: OpCodeRequest): OpCodeResponse {
@@ -625,9 +645,26 @@ function call(request: OpCodeRequest): OpCodeResponse {
 
 function cp(request: OpCodeRequest): OpCodeResponse {
     const op: number = request.code[0];
+    const computer: Computer = request.computer;
+    const registers: Registers = computer.registers;
+    let byte : number = [
+        registers.B,
+        registers.C,
+        registers.D,
+        registers.E,
+        registers.H,
+        registers.L,
+        computer.readByte(computer.combineHL()),
+        registers.A,
+    ][op % 8];
+    registers.A = byte;
+    computer.setZ(byte === 0);
+    computer.setN(true);
+    computer.setH(calculateHalfBit(byte));
+    computer.setC(calculateCarryBit(byte));
     const reg: string = ['B', 'C', 'D', 'E', 'H', 'L', '(HL)', 'A'][op & 7];
     if (op === 0xFE) return {text: `\tCP $${toHex(request.code[1])}`};
-    else return {text: `\tCP ${reg}`};
+    else return {text: `\tCP ${reg}`, visited: true};
 }
 
 const CB_TABLE: OpCodeFunction[] = [
